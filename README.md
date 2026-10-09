@@ -24,7 +24,7 @@ https://your-app.up.railway.app/proxy?url=https://example.com
 
 ```bash
 pip install -r requirements.txt
-python app.py
+python main.py
 ```
 
 Then open http://localhost:8080
