@@ -33,7 +33,6 @@ HOME_HTML = """
             position: relative;
         }
 
-        /* Animated background */
         .bg {
             position: fixed;
             inset: 0;
@@ -183,7 +182,6 @@ HOME_HTML = """
             letter-spacing: 2px;
         }
 
-        /* Particles */
         .particle {
             position: fixed;
             width: 2px;
@@ -223,7 +221,6 @@ HOME_HTML = """
     <div class="footer">UNKNOWN LAB // SECURE PROXY</div>
 
     <script>
-        // Create floating particles
         for (let i = 0; i < 30; i++) {
             const p = document.createElement('div');
             p.className = 'particle';
@@ -284,10 +281,14 @@ def process_srcset(srcset, base_url, proxy_base):
             parts.append(' '.join(bits))
     return ', '.join(parts)
 
+def rewrite_css_urls(css_text, base_url, proxy_base):
+    def repl(match):
+        return f"url({rewrite_url(match.group(1), base_url, proxy_base)})"
+    return re.sub(r"url\(['\"]?([^)'\"]+)['\"]?\)", repl, css_text)
+
 def rewrite_html(content, base_url, proxy_base):
     soup = BeautifulSoup(content, 'html.parser')
 
-    # Rewrite all relevant attributes
     for tag in soup.find_all(True):
         for attr in REWRITE_ATTRS:
             if tag.has_attr(attr):
@@ -297,21 +298,13 @@ def rewrite_html(content, base_url, proxy_base):
                 else:
                     tag[attr] = rewrite_url(val, base_url, proxy_base)
 
-    # Rewrite inline styles with url()
-    for tag in soup.find_all(style=True):
-        style = tag['style']
-        def repl(m):
-            return f"url({rewrite_url(m.group(1), base_url, proxy_base)})"
-        tag['style'] = re.sub(r'url\([\'"]?([^\)'\"]+)[\'"]?\)', repl, style)
+        if tag.has_attr('style'):
+            tag['style'] = rewrite_css_urls(tag['style'], base_url, proxy_base)
 
-    # Rewrite <style> blocks
     for style_tag in soup.find_all('style'):
         if style_tag.string:
-            def repl(m):
-                return f"url({rewrite_url(m.group(1), base_url, proxy_base)})"
-            style_tag.string = re.sub(r'url\([\'"]?([^\)'\"]+)[\'"]?\)', repl, style_tag.string)
+            style_tag.string = rewrite_css_urls(style_tag.string, base_url, proxy_base)
 
-    # Inject base tag for relative resolution fallback
     if soup.head:
         base_tag = soup.new_tag('base', href=base_url)
         soup.head.insert(0, base_tag)
@@ -338,11 +331,10 @@ def proxy():
             'User-Agent': request.headers.get('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'),
             'Accept': request.headers.get('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'),
             'Accept-Language': request.headers.get('Accept-Language', 'en-US,en;q=0.9'),
-            'Accept-Encoding': 'identity',  # avoid compressed streams issues
+            'Accept-Encoding': 'identity',
             'Referer': target,
         }
 
-        # Forward cookies if any
         cookies = request.cookies
 
         resp = requests.get(
@@ -357,21 +349,16 @@ def proxy():
         content_type = resp.headers.get('Content-Type', '').lower()
         proxy_base = request.url_root.rstrip('/') + '/proxy'
 
-        # HTML → full rewrite
         if 'text/html' in content_type:
             content = resp.content.decode(resp.encoding or 'utf-8', errors='replace')
             rewritten = rewrite_html(content, target, proxy_base)
             return Response(rewritten, status=resp.status_code, content_type='text/html; charset=utf-8')
 
-        # CSS → rewrite urls inside
         if 'text/css' in content_type:
             content = resp.content.decode(resp.encoding or 'utf-8', errors='replace')
-            def repl(m):
-                return f"url({rewrite_url(m.group(1), target, proxy_base)})"
-            content = re.sub(r'url\([\'"]?([^\)'\"]+)[\'"]?\)', repl, content)
+            content = rewrite_css_urls(content, target, proxy_base)
             return Response(content, status=resp.status_code, content_type=content_type)
 
-        # Everything else (images, js, fonts, etc.) → pass through
         excluded = ['content-encoding', 'content-length', 'transfer-encoding', 'connection']
         response_headers = [(k, v) for k, v in resp.headers.items() if k.lower() not in excluded]
 
